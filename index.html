@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Horas por Docente — Dashboard</title>
+  <title>Sistema de Gestión Docente</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
@@ -45,11 +45,17 @@
     .hidden{display:none}
     .danger{color:#fca5a5}
     .nowrap{white-space:nowrap}
+    header{display:flex;align-items:center;gap:12px}
+    header .brand{display:flex;align-items:center;gap:12px}
+    header img.logo{height:44px;width:auto;object-fit:contain;border-radius:8px}
   </style>
 </head>
 <body>
   <header>
-    <h1>Horas por docente • Filtro y sumatoria (Programáticas / Extraprogramáticas)</h1>
+    <div class="brand">
+      <img class="logo" src="./logo.png" alt="Logo Escuela" />
+      <h1>Sistema de Gestión Docente</h1>
+    </div>
   </header>
   <main>
     <div class="grid">
@@ -57,6 +63,9 @@
         <div class="controls">
           <label class="pill">
             <input id="csvFile" type="file" accept=".csv,.tsv,.txt,application/vnd.ms-excel" />
+          </label>
+          <label class="pill">
+            <button id="pegarBtn" type="button">📋 Pegar datos</button>
           </label>
           <label class="pill">
             Docente: 
@@ -70,7 +79,7 @@
           </label>
           <button id="descargarBtn" aria-disabled="true" title="Descargar resultados" disabled>📥 Descargar CSV</button>
         </div>
-        <p class="hint">Exportá tu Google Sheet a <strong>Archivo → Descargar → CSV</strong> y cargalo acá. Encabezados esperados (insensibles a mayúsculas/acentos): <em>Grado</em>, <em>Materia</em>, <em>Cantidad de Hora(s)</em>, <em>Docente Titular</em>, <em>Docente Suplente</em>, <em>Tipo de hora</em>.</p>
+        <p class="hint">Este dashboard <strong>no se linkea</strong> a tu Sheets. Trabaja con un <strong>snapshot</strong> que vos cargás. Opciones: subir CSV o <em>pegar</em> los datos.</p> Encabezados esperados (insensibles a mayúsculas/acentos): <em>Grado</em>, <em>Materia</em>, <em>Cantidad de Hora(s)</em>, <em>Docente Titular</em>, <em>Docente Suplente</em>, <em>Tipo de hora</em>.</p>
         <div id="status" class="hint"></div>
         <div class="kpi">
           <div class="box"><div class="label">Total de horas</div><div id="kTotal" class="value">—</div></div>
@@ -115,8 +124,18 @@
         <p class="hint">Todo sucede en tu navegador. No se sube nada a servidores.</p>
       </aside>
     </div>
+  <div id="modalPegar" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:grid;place-items:center;z-index:50">
+    <div class="card" style="width:min(900px,92vw);max-height:80vh;overflow:auto">
+      <h3 style="margin-top:0">Pegar datos desde Sheets</h3>
+      <p class="hint">En tu Sheets, seleccioná la tabla completa y copiá. Pegá acá abajo y apretá «Usar datos pegados».</p>
+      <textarea id="pegarArea" style="width:100%;height:40vh;background:#0b1220;color:var(--text);border:1px solid #223049;border-radius:12px;padding:10px"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button id="cancelarPegado" type="button" style="background:#374151;color:#e5e7eb">Cancelar</button>
+        <button id="usarPegado" type="button">Usar datos pegados</button>
+      </div>
+    </div>
+  </div>
   </main>
-
   <script>
     // Helpers
     const normalize = (s='') => s.toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim();
@@ -256,6 +275,21 @@
     }
 
     // Event wiring
+    function cargarDesdeObjetos(rows, fields){
+      MAPPING = detectHeaders(fields);
+      const required = ['grado','materia','horas','titular','suplente','tipo'];
+      const faltantes = required.filter(k=>MAPPING[k]===-1);
+      if(faltantes.length){
+        el('status').innerHTML = 'Encabezados faltantes o no reconocidos: <b>'+faltantes.join(', ')+'</b>.';
+      } else {
+        el('status').textContent = '';
+      }
+      RAW_ROWS = rows.map(row => fields.map(h=>row[h]));
+      const docentes = uniqueDocentes(RAW_ROWS);
+      renderDocentes(docentes);
+      el('status').textContent = `Datos listos. Docentes detectados: ${docentes.length}.`;
+    }
+
     el('csvFile').addEventListener('change', (e)=>{
       const file = e.target.files?.[0];
       if(!file){return}
@@ -267,21 +301,25 @@
             el('status').innerHTML = '<span class="danger">No pude leer encabezados en el CSV.</span>';
             return;
           }
-          MAPPING = detectHeaders(res.meta.fields);
-          const required = ['grado','materia','horas','titular','suplente','tipo'];
-          const faltantes = required.filter(k=>MAPPING[k]===-1);
-          if(faltantes.length){
-            el('status').innerHTML = 'Encabezados faltantes o no reconocidos: <b>'+faltantes.join(', ')+'</b>. Revisá los nombres.';
-          }
-          RAW_ROWS = res.data.map(row => res.meta.fields.map(h=>row[h]));
-          const docentes = uniqueDocentes(RAW_ROWS);
-          renderDocentes(docentes);
-          el('status').textContent = `Archivo cargado: ${file.name}. Docentes detectados: ${docentes.length}.`;
+          cargarDesdeObjetos(res.data, res.meta.fields);
         },
         error: (err)=>{
           el('status').innerHTML = '<span class="danger">Error al leer el CSV: '+(err?.message||err)+'</span>';
         }
       });
+    });
+
+    // Pegar modal
+    const modal = el('modalPegar');
+    el('pegarBtn').addEventListener('click', ()=> modal.classList.remove('hidden'));
+    el('cancelarPegado').addEventListener('click', ()=> modal.classList.add('hidden'));
+    el('usarPegado').addEventListener('click', ()=>{
+      const txt = el('pegarArea').value.trim();
+      if(!txt){modal.classList.add('hidden');return}
+      Papa.parse(txt, {header:true, skipEmptyLines:true, complete:(res)=>{
+        cargarDesdeObjetos(res.data, res.meta.fields||[]);
+        modal.classList.add('hidden');
+      }});
     });
 
     docenteSelect.addEventListener('change', ()=>{
@@ -299,3 +337,4 @@
   </script>
 </body>
 </html>
+
